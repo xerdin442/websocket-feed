@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"sync"
+	"time"
 
 	"golang.org/x/net/websocket"
 )
@@ -74,12 +76,39 @@ func (s *Server) broadcastMsg(msg []byte, sender string) {
 	}
 }
 
-func (s *Server) sendDirectMsg(msg []byte, recipient string) {}
+func (s *Server) handleFeed(ws *websocket.Conn) {
+	fmt.Printf("New subscription: %s\n", ws.RemoteAddr())
+
+	msgChan := make(chan bool)
+
+	go func() {
+		for {
+			payload := fmt.Sprintf("Subscription feed data -> %d", time.Now().UnixMilli())
+			ws.Write([]byte(payload))
+			msgChan <- true
+
+			time.Sleep(time.Second * 2)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			ws.Write([]byte("Feed data complete. Stay tuned for more!"))
+			return
+		case <-msgChan:
+		}
+	}
+}
 
 func main() {
 	server := NewServer()
 
 	http.Handle("/ws", websocket.Handler(server.handleConn))
+	http.Handle("/feed", websocket.Handler(server.handleFeed))
 
 	fmt.Println("Server starting on port 8080...")
 
