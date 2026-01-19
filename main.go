@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"net/http"
 	"sync"
@@ -11,7 +10,7 @@ import (
 
 type Connections struct {
 	m     sync.Mutex
-	store map[*websocket.Conn]bool
+	store map[string]*websocket.Conn
 }
 
 type Server struct {
@@ -21,37 +20,61 @@ type Server struct {
 func NewServer() *Server {
 	return &Server{
 		conns: Connections{
-			store: make(map[*websocket.Conn]bool),
+			store: make(map[string]*websocket.Conn),
 		},
 	}
 }
 
 func (s *Server) handleConn(ws *websocket.Conn) {
+	params := ws.Request().URL.Query()
+	name := params.Get("name")
+
+	if name == "" {
+		name = "Anonymous"
+	}
+
 	s.conns.m.Lock()
-	defer s.conns.m.Unlock()
+	s.conns.store[name] = ws
+	s.conns.m.Unlock()
 
-	fmt.Println("New incoming connection:", ws.RemoteAddr())
+	fmt.Printf("New connection: %s (Remote Addr: %s)\n", name, ws.RemoteAddr())
 
-	s.conns.store[ws] = true
+	s.receiveMsg(ws, name)
 
-	go s.receiveMsg(ws)
+	s.conns.m.Lock()
+	delete(s.conns.store, name)
+	s.conns.m.Unlock()
 }
 
-func (s *Server) receiveMsg(ws *websocket.Conn) {
-	scanner := bufio.NewScanner(ws)
+func (s *Server) receiveMsg(ws *websocket.Conn, name string) {
+	buf := make([]byte, 1024)
+	for {
+		n, err := ws.Read(buf)
+		if err != nil {
+			fmt.Println("Connection closed:", ws.RemoteAddr())
+			break
+		}
 
-	for scanner.Scan() {
-		msg := scanner.Text()
-		fmt.Printf("Received message from %v: %s", ws.RemoteAddr(), msg)
-
-		ws.Write([]byte("Thank you!"))
-	}
-
-	if err := scanner.Err(); err != nil {
-		fmt.Println("Error reading from connection:", err)
-		return
+		msg := buf[:n]
+		s.broadcastMsg(msg, name)
 	}
 }
+
+func (s *Server) broadcastMsg(msg []byte, sender string) {
+	for name, ws := range s.conns.store {
+		if sender == name {
+			continue
+		}
+
+		go func(ws *websocket.Conn) {
+			if _, err := ws.Write(msg); err != nil {
+				fmt.Println("Broadcast error:", err)
+			}
+		}(ws)
+	}
+}
+
+func (s *Server) sendDirectMsg(msg []byte, recipient string) {}
 
 func main() {
 	server := NewServer()
